@@ -1,0 +1,687 @@
+---
+title: 'AT3: Spatial Analysis'
+author: "Felipe Monroy"
+date: "19-06-2020"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 3
+    theme: journal
+bibliography: "AT3 STDS.bib"
+csl: "apa-6th-edition.csl"
+always_allow_html: true
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r package, include=FALSE}
+#Basic
+library(bookdown)
+library(tidyverse)
+library(lubridate)
+library(here)
+library(kableExtra) #Tables
+
+#Maps
+library(sp)
+library(rgdal)
+library(automap) #Interpolation
+library(broom)
+library(raster) 
+library(spgwr) #Regression
+library(lctools) #Moran test
+library(tmap)
+library(rgeos)
+library(broom)
+library(tmaptools)
+
+```
+
+# Introduction {-}
+According to the Australian Bureau of Statistics, around 15% of household spending is destined for transportation [@absMainFeaturesAverage2017]. Considering that 57% of people use cars as their primary means of transport [@absWorkingPopulationProfile2016], a high proportion of the household budget is spent on petrol. This makes people extremely sensitive to changes in petrol prices, which can vary mostly due to international variables. However, according to our previous research, petrol stations have significative differences in prices across Greater Sydney, where competition seems to be one of the factors that influence these local variations.
+
+Nevertheless, how competition affects petrol prices is not constant across different petrol stations clusters. Therefore, it could be affected by market characteristics and even possible collusion between retailers. According to @byrneLearningCoordinateStudy2015, this last factor was present in Perth petrol market, but there was no evidence to call it formal collusion, just tacit.
+
+The propose of this research is to understand how competition affects retail petrol prices in Greater Sydney using spatial analysis, so we can capture how it differs across different locations. The outcome of this analysis may be helpful for organizations, like the ACCC, whose aim is to promote competition and fair trading. Therefore, these results could help them to focus their investigations on specific risk areas. 
+
+# Background {-}
+In our previous analysis, we aimed to evaluate a series of factors that affect petrol prices for three years of data. We used variables that capture variability across time (seasonality and trend), environmental status, stations attributes and market characteristics. Table \@ref(tab:prevvariables) shows the details of the variables that we used.
+
+```{r prevvariables, echo = FALSE, fig.align = 'center'}
+
+temp<-data.frame("Time"=c("International petrol price index",
+                          "Local price cycle",
+                          "Type of day (holiday)"),
+                 "Environmental"=c("Air Quality Index",
+                                   "Bush fire Intensity",
+                                   ""),
+                 "Station_Characteristics"=c("Brand Size",
+                                             "",""),
+                 "Market_Characteristics"=c("Competition",
+                                            "",""))
+
+kable(temp, caption = "Features that we used in our previous research", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size=11) %>%
+            row_spec(0, bold = T, color = "white", background = "#eb6864")
+            #column_spec(1,width="6cm") %>%
+            #column_spec(2,width="6cm") 
+            ##eb6864
+
+```
+
+There were several limitations in that research that could have influenced the results. Firstly, we summarised the data of same-brand stations in each suburb; therefore, local variation was underestimated. Additionally, we utilized linear regression, which assumes that the observations are not autocorrelated through space and time, which is counterintuitive because consecutive days and close stations have similar prices. On the other hand, the competition variable did only indicated if a rival brand was present in the suburb, not considering other closest stations in different suburbs or the increase in competition when more than one brand was present in the area.
+
+Considering those reasons, it was not possible to use our previous analysis to understand the effect of competition on petrol prices. Therefore, if the assumption of spatial autocorrelation is correct, spatial analysis and the geographically weighted regression (GWR) appears as a good alternative.
+
+# Data Understanding {-}
+To start the spatial analysis is necessary to have data without temporal autocorrelation. For this reason, I changed the data and variables that we used in our first research. In regards to the data, only the day that represented better the population of petrol stations was selected to remove temporal autocorrelation. In this case, November 29th of 2019 had the prices for 87% of Greater Sydney petrol stations. Moreover, the fuel E10 was selected because it was the one with more observations.
+
+The next map shows the petrol stations in Greater Sydney with at least one observation between November and December of 2019, where the yellow dots correspond to the stations of our sample (November 29th of 2019). It can be noticed that the distribution of the sample is similar to the population of petrol stations.
+
+```{r representativity, echo = FALSE, out.width = '100%', fig.align = 'center', fig.pos="H"}
+#Reading NSW Map
+nsw_map<- readOGR(dsn="../05 Maps Data", layer="SA2_2016_AUST", verbose=FALSE)
+nsw_map_sub<-nsw_map[nsw_map$GCC_NAME16=="Greater Sydney",]
+
+#Reading Petrol Stations Data
+stations_data <- readRDS(here("07 Processed Data","merged_station_data.rds"))
+SA2_data <- readRDS(here("07 Processed Data","SA2_data.rds"))
+
+#Filtering to Greater Sydney
+stations_data<-stations_data %>% 
+            filter(SA2_MAIN16 %in% nsw_map_sub@data$SA2_MAIN16)
+SA2_data<-SA2_data %>% 
+            filter(SA2_MAIN16 %in% nsw_map_sub@data$SA2_MAIN16) %>%
+            dplyr::select(-AREASQKM16,-SA2_name)
+
+#Adding SEIFA to Map
+SA2_data$SA2_MAIN16<-as.character(SA2_data$SA2_MAIN16)
+nsw_map_sub@data<-nsw_map_sub@data %>% left_join(SA2_data) %>%
+            rename(IER_decile=`IER Decile`,
+                   Cars_per_dwelling=cars_per_dwelings,
+                   Average_commute_distance_km=avg_comm_distance,
+                   Own_car_as_main_trasportation_perc=percentage_car_travel,
+                   Population_density_per_km2=pop_density) %>%
+            mutate(IER_decile=round(IER_decile,0),
+                   Cars_per_dwelling=round(Cars_per_dwelling,2),
+                   Average_commute_distance_km=round(Average_commute_distance_km,2),
+                   Own_car_as_main_trasportation_perc=round(Own_car_as_main_trasportation_perc,2),
+                   Population_density_per_km2=round(Population_density_per_km2,2))
+
+#Adding Categories to the sample
+stations_data<-stations_data %>% 
+            mutate(sampled=ifelse(!is.na(price) &
+                                             !is.na(brand_size) &
+                                             !is.na(competition_index) & 
+                                             !is.na(percentage_car_travel) &
+                                             !is.na(`IRSED Decile`) &
+                                             !is.na(cars_per_dwelings) &
+                                             !is.na(avg_comm_distance) &
+                                             !is.na(total_cars),TRUE,FALSE))
+
+stations_coord<-stations_data %>%
+            rename(Price=price,
+                   Brand_size=brand_size,
+                   Brand=brand,
+                   Station_name=station_name,
+                   Number_of_competitors=distinct_brand_1mile,
+                   IER_decile=`IER Decile`,
+                   Cars_per_dwelling=cars_per_dwelings,
+                   Average_commute_distance_km=avg_comm_distance,
+                   Own_car_as_main_trasportation_perc=percentage_car_travel,
+                   Population_density_per_km2=pop_density) %>%
+            mutate(Price=round(Price,2))
+
+
+coordinates(stations_coord)<- ~ lon + lat
+stations_coord@proj4string@projargs<-"+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"
+
+#Maping
+map_gsyd<-tm_shape(nsw_map_sub)+
+            tm_polygons(id="SA2_NAME16",
+                        popup.vars=c("IER_decile","Cars_per_dwelling",
+                                     "Average_commute_distance_km",
+                                     "Own_car_as_main_trasportation_perc",
+                                     "Population_density_per_km2"),
+                        alpha=0) +
+            tm_shape(stations_coord) +
+            tm_dots(title="In sample",
+                   col="sampled",
+                  id="Station_name",
+                   popup.vars=c("ID","Brand","Brand_size",
+                        "Number_of_competitors","Price"))
+
+#map_gsyd<-tm_shape(nsw_map_sub)+
+#            tm_polygons(id="SA2_NAME16",
+#                        popup.vars=c("AREASQKM16","IRSEAD Decile",
+#                                     "population"),
+#                        alpha=0) +
+#            tm_shape(stations_coord) + 
+#            tm_dots(title="In sample",
+#                    col="sampled",
+#                    id="station_name",
+#                    popup.vars=c("ID","brand","brand_size",
+#                                 "competition_index","price"))
+tmap_mode("view")
+map_gsyd
+
+```
+
+The features that I used for the analysis could be divided into two groups, petrol stations characteristics and market characteristics. It is worth mentioning that the number of competitors is the only variable that is capturing competition. Table \@ref(tab:currentvariables) shows a brief description of each variable.
+
+(ref:distance) @leeSpatialCompetitionRetail2009
+
+```{r currentvariables, echo = FALSE, fig.align = 'center'}
+
+            temp<-data.frame("Category"=c("Station Characteristics",
+                             "Market Characteristics",
+                             "Market Characteristics",
+                             "Market Characteristics",
+                             "Market Characteristics",
+                             "Market Characteristics",
+                             "Market Characteristics"),
+                 "Feature"=c("Brand size",
+                              "Number of competitors",
+                              "IER decile",
+                              "Cars per dwelling",
+                              "Average commute distance",
+                              "Own car as main trasportation",
+                              "Population density"),
+                 "Definition"=c("Indicates if the brand belongs to a big company. 1 for Metro, CostCo, United, 7 Eleven, BP, Caltex, Shell and Coles Express. 0 for others",
+                                "Indicates the number of competitors (other brands) within a radius of 1 mile. According to (ref:distance), competitors within this distance affects petrol prices",
+                                "The Index of Economic Resources summarises variables related to income and wealth, excluding education and occupation. A high score (in deciles) indicates relatively greater access to economic resources in general. In this case, the Index is presented per Statistical Area Level 2",
+                                "Number of cars divided by the number of dwellings in each Statistical Area Level 2",
+                                "Average commute distance of occupied people per Statistical Area Level 2",
+                                "Percentage of people over 15 years old who used private vehicles as their primary transportation in each Statistical Area Level 2",
+                                "Population density in people per squared kilometre. The variable is presented per Statistical Area Level 2"))
+
+kable(temp, caption = "Features used for spatial analysis", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size = 11) %>%
+            column_spec(1,width="5cm") %>%
+            column_spec(2,width="5cm") %>%
+            column_spec(3,width="15cm") %>%
+            collapse_rows(columns = 1, valign = "top") %>%
+            row_spec(0, bold = T, color = "white", background = "#eb6864")
+
+```
+
+## Spatial Autocorrelation {-}
+Spatial autocorrelation measures how close observations (or neighbours) influence a variable, in this case, E10 price. When spatial autocorrelation is present, the residuals from a linear regression model, tend to have a spatial dependency. Figure \@ref(fig:residualsplot) shows the distribution of the residuals from linear regression (with E10 price as the independent variable) in Greater Sydney, where we can see that similar residual values are grouped. In this case, I used Kriging interpolation to fill the gaps between petrol stations.
+
+```{r residualsplot, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="Distribution of the residuals from a linear regression model", fig.pos="H"}
+#Reading Residuals
+lzn.kriged_res <- readRDS(here("09 Modelling Files","lzn_kriged_residuals.rds"))
+lzn.kriged_res<-spTransform(lzn.kriged_res$krige_output, 
+                  CRS("+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"))
+
+tidy_spdf<-tidy(lzn.kriged_res)
+tidy_var<-lzn.kriged_res@data
+tidy_var$id<-as.character(1:nrow(tidy_var))
+plotData<-left_join(tidy_spdf,tidy_var, by="id")
+#Maping
+ggplot()+geom_polygon(data=plotData,
+                      aes(fill=var1.pred,x=long,y=lat,group=group))+
+            scale_fill_gradient2(low="blue",mid="grey80",high="red")+
+            geom_polygon(data=nsw_map_sub,
+                         aes(x=long,y=lat,group=group),
+                         fill=NA,colour="black",alpha=0.3)+
+            theme_minimal()+
+            labs(fill='Residuals')+
+            theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.title.y=element_blank(),
+                  axis.text.y=element_blank(),
+                  axis.ticks.y=element_blank(),
+                  panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank())
+```
+
+Additionally, a statistical test was used to prove spatial autocorrelation. The statistic that I used is called Moran's I, which evaluates whether the pattern expressed is clustered, dispersed, or random [@esriHowSpatialAutocorrelation2020]. The hypothesis test related to this statistic has random spatial distribution as the null hypothesis and presence of spatial clusters as the alternative hypothesis. Table \@ref(tab:globalmorantest) shows a p-value close to zero; therefore, the null hypothesis is rejected, and we can assume that there is global spatial autocorrelation at the 0.05 significance level.
+
+```{r globalmorantest, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="Documents divided by number of words", fig.pos="H"}
+stations_data_nona<-read_rds(here("09 Modelling Files","input_data.rds")) %>%
+            rename(IRSED_Decile=`IRSED Decile`,
+                   IER_Decile=`IER Decile`)
+coordinates(stations_data_nona)<- ~ lon + lat
+stations_data_nona@proj4string@projargs<-"+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"
+
+set.seed(20)
+GWRbandwidth <- gwr.sel(price~brand_size+distinct_brand_1mile+percentage_car_travel+
+                                    IER_Decile+cars_per_dwelings+avg_comm_distance+
+                                    pop_density, 
+                        data=stations_data_nona,adapt=T,
+                        verbose=FALSE)
+#Global Moran
+globalmoran<-moransI(data.frame(x=stations_data_nona$lon,y=stations_data_nona$lat), 
+                      GWRbandwidth, 
+                      as.vector(stations_data_nona$price), 
+                      WType='Binary')
+
+#Creating Table
+temp<-globalmoran
+temp$W<-NULL
+temp<-unlist(temp)
+temp<-data.frame(Statistics=names(temp),Value=round(temp,3))
+rownames(temp) <- NULL
+#kable
+kable(temp, caption = "Moran's I statistic results for global spatial autocorrelation", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size = 11) %>%
+            column_spec(1,width="6cm") %>%
+            column_spec(2,width="6cm") %>%
+            row_spec(0, bold = T, color = "white", background = "#eb6864")
+
+```
+
+Moran's I statistic can also be calculated locally, so we can see where these clusters formed. Figure \@ref(fig:moranplot) shows how each observation is related to their neighbours; therefore, the diagonal line corresponds to a positive spatial autocorrelation. However, there are points separated from the diagonal line, which means that the relationship between neighbours is different. Four types of relationships are shown in each quadrant of the Figure, where the most important for this research corresponds to "high-high". This relationship means that where the petrol station has a price over the average, their neighbours also have it. 
+
+```{r moranplot, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="Moran's I Scatter Plot", fig.pos="H"}
+#Local Moran
+
+localmoran<-l.moransI(data.frame(x=stations_data_nona$lon,y=stations_data_nona$lat), 
+          GWRbandwidth, 
+          as.vector(stations_data_nona$price), 
+          WType='Binary', 
+          scatter.plot = FALSE, 
+          family = "adaptive")
+
+ggplot(localmoran,aes(x=Xi,y=wXj))+
+            geom_point(shape=1)+
+            theme_light()+
+            theme(panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank())+
+            xlim(-max(abs(localmoran$Xi)),max(abs(localmoran$Xi)))+
+            ylim(-max(abs(localmoran$wXj)),max(abs(localmoran$wXj)))+
+            geom_vline(xintercept = 0)+
+            geom_hline(yintercept = 0)+
+            stat_smooth(method="lm", se=FALSE, colour="red", size=0.5)+
+            xlab("Standardised value of E10 price")+
+            ylab("Standardised value of E10 price lagged")+
+            geom_label(aes(x = 3.5, y = 4.2,
+                           label = "High-High relationship"), size=3,fill="grey")+
+            geom_label(aes(x = -3.5, y = 4.2,
+                           label = "Low-High relationship"), size=3,fill="grey")+
+            geom_label(aes(x = -3.5, y = -4.2,
+                           label = "Low-Low relationship"), size=3,fill="grey")+
+            geom_label(aes(x = 3.5, y = -4.2,
+                           label = "High-Low relationship"), size=3,fill="grey")
+            
+```
+
+Nevertheless, there is no spatial autocorrelation in all locations; therefore, not all relationship are significative. Figure \@ref(fig:localmorantest) shows the areas where Moran's I statistic enable us to reject the null hypothesis, which means that we can assume that there is spatial autocorrelation (in intense red).
+
+```{r localmorantest, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="p-values calculated using local Moran's statistic", fig.pos="H"}
+#Reading Residuals
+lzn.kriged_p_value <- readRDS(here("09 Modelling Files","lzn_kriged_p_value.rds"))
+lzn.kriged_p_value<-spTransform(lzn.kriged_p_value$krige_output, 
+                  CRS("+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"))
+
+tidy_spdf<-tidy(lzn.kriged_p_value)
+tidy_var<-lzn.kriged_p_value@data
+tidy_var$id<-as.character(1:nrow(tidy_var))
+plotData<-left_join(tidy_spdf,tidy_var, by="id") %>%
+            mutate(signi=ifelse(var1.pred<0.05,TRUE,FALSE))
+#Maping
+ggplot()+geom_polygon(data=plotData,
+                      aes(fill=var1.pred,x=long,y=lat,group=group))+
+            scale_fill_gradient2(low="red",mid="red",high="grey80")+
+            geom_polygon(data=nsw_map_sub,
+                         aes(x=long,y=lat,group=group),
+                         fill=NA,colour="black",alpha=0.3)+
+            theme_minimal()+
+            labs(fill='p value')+
+            theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.title.y=element_blank(),
+                  axis.text.y=element_blank(),
+                  axis.ticks.y=element_blank(),
+                  panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank())
+
+```
+
+According to @lundbergCartelDetectionMoran2017 the Moran's I test for spatial correlation could be used to detect potential price coordination, which in this case means clusters of petrol stations with high prices, not being affected by the nature of competition. Table \@ref(tab:clusters) shows all the clusters with significative spatial autocorrelation and their type of relationship. For this task, only the clusters with relationship "high-high" are considered as possible collusion due to "low-low" is a signal of high competition. It is worth noticing that some of the clusters have only stations of the same company; therefore, it can not be considered as possible collusion.
+
+```{r clusters, echo = FALSE, fig.align = 'center'}
+#Df for plotting
+station_data<-data.frame(cbind(stations_data_nona$ID,
+                               stations_data_nona$lon,
+                               stations_data_nona$lat))
+
+names(station_data)<-c("ID","lon","lat")
+station_data<-cbind(station_data,localmoran[,2:9])
+
+#Addding high high low low
+station_data<-station_data %>% mutate(quad_sig=case_when(
+            p.value<=0.05 & Xi>0 & wXj>0 ~ "high-high",
+            p.value<=0.05 & Xi<=0 & wXj<=0 ~ "low-low",
+            p.value<=0.05 & Xi>0 & wXj<=0 ~ "high-low",
+            p.value<=0.05 & Xi<=0 & wXj>0 ~ "low-high",
+            TRUE ~ "non-significant"
+))
+
+
+station_data_filter<-station_data %>% filter(!quad_sig=="non-significant")
+station_data_filter<-split(station_data_filter,station_data_filter$quad_sig)
+
+station_data_filter<-lapply(station_data_filter,function(x){x[,c("ID","lon","lat")]})
+station_data_filter<-lapply(station_data_filter,function(x){rownames(x)<-x$ID; return(x)})
+station_data_filter$`low-high`<-NULL
+
+dist<-lapply(station_data_filter,function(x){dist(as.matrix(x[,c("lon","lat")]))})
+dist<-lapply(dist,hclust)
+dist<-lapply(dist,function(x){cutree(x,h=GWRbandwidth)})
+dist<-lapply(dist,function(x){
+            c<-data.frame(ID=names(x),
+                          Cluster=(x))
+            rownames(c)<-NULL;
+            return(c)
+})
+
+cluster_data<-dplyr::bind_rows(dist, .id = 'Type') %>%
+            mutate(ID=as.numeric(ID)) %>%
+            left_join(stations_data_nona@data[,c("ID","brand","price")]) %>%
+            group_by(Type,Cluster) %>%
+            mutate(count=n()) %>%
+            filter(count>1) %>%
+            dplyr::select(-count) %>% ungroup() %>%
+            mutate(Cluster=ifelse(Type=="low-low",Cluster+17,Cluster))
+
+cluster_data_grouped<-cluster_data %>% group_by(Type,Cluster) %>%
+            summarise(count=n(),
+                      IDs=paste(ID,collapse = ", "),
+                      brands=paste(brand,collapse = ", "),
+                      prices=paste(round(price,1), collapse = ", ")) %>%
+            ungroup() %>% filter(count>1) %>%
+            dplyr::select(-count)
+
+cluster_data_grouped<-cluster_data_grouped %>%
+            rename(station_ids=IDs, relationship=Type,
+                   cluster_id=Cluster) %>%
+            dplyr::select(cluster_id,relationship,everything())
+
+cluster_data<-cluster_data %>% rename(relationship=Type,
+                                      station_id=ID,
+                                      cluster_id=Cluster)
+
+
+kable(cluster_data_grouped, caption = "Clusters with significance spatial autocorrelation by type of relationship", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size = 11) %>% 
+            row_spec(0, bold = T, color = "white", background = "#eb6864") %>%
+            scroll_box(height = "300px")
+            
+```
+
+# Modelling {-}
+The next step consists of understanding how each of the features exposed in Table \@ref(tab: currentvariables) affect E10 price in the clusters.  We discovered that spatial autocorrelation was present in the data, which means that some E10 prices are highly correlated with its neighbours, but not related to prices of distant stations. This means that features have a different effect on price depending on the location; therefore, a linear regression model would not be able to capture the local variations. 
+
+On the other hand, the geographically weighted regression (GWR) can capture spatial variation in the coefficients. This exploratory technique work in a similar way as linear regression; however, it assigns different weights to each observation, which values are given based on distance. In other words, data points more close to the regression point are more important in the regression than far points [@fotheringhamSageHandbookSpatial2009]. Therefore, the weights and the resulting coefficients change every time the regression points change.
+
+The weighted function could be categorized into two types; fixed or adaptative. In this case, I used an adaptative weight function; therefore, the weights depend on the density of data points in the area and not only on a fixed distance. In this dataset that means that in more dense regions (regarding to petrol stations) the distance to high weighted observations will be lower than in areas with few data points.
+
+## Results {-}
+A summary with the coefficient of the geographically weighted regression with adaptative weight function is shown in Table \@ref(tab:gwr). In this Table we can see some measure of the distribution of the coefficients, which vary across space. Due to the objective is to find information that can expose signs of collusion, special attention is given to the variable "Number of competitors".
+
+According to Table \@ref(tab:gwr) the coefficient of "Number of competitors" range from -1.71 to 0.86,  which means that in some places more competitors decrease petrol prices and in others, they increase it.
+
+```{r gwr, echo = FALSE, fig.align = 'center'}
+gwr.model = spgwr::gwr(price~brand_size+distinct_brand_1mile+IER_Decile+
+                            cars_per_dwelings+
+                            avg_comm_distance+
+                            percentage_car_travel+
+                            pop_density,
+                data = stations_data_nona, 
+                adapt=GWRbandwidth, 
+                hatmatrix=TRUE, 
+                se.fit=TRUE)
+
+results <-as.data.frame(gwr.model$SDF)
+
+temp<-gwr.model$SDF@data[,1:9] %>% 
+            dplyr::select(`01Intercept`=`(Intercept)`,
+                          `02Brand_size`=brand_sizesmall,
+                          `03Number_of_competitors`=distinct_brand_1mile,
+                          `04IER_decile`=IER_Decile,
+                          `05Cars_per_dwelling`=cars_per_dwelings,
+                          `06Average_commute_distance`=avg_comm_distance,
+                          `07Own_car_as_main_transportation`=percentage_car_travel,
+                          `08Population_density`=pop_density) %>%
+            gather(key="Feature",value="Coefficient") %>% 
+            group_by(Feature) %>%
+            summarise(Min=min(Coefficient),
+                      "1st_Quantile"=quantile(Coefficient,0.25),
+                      Median=median(Coefficient),
+                      "3rd_Quantile"=quantile(Coefficient,0.75),
+                      Max=max(Coefficient)) %>%
+            mutate(Feature=gsub("[0-9]|[0-9]$", "", Feature)) %>%
+            mutate(Feature=gsub("_", " ", Feature))
+
+kable(temp, caption = "Summary of the coefficients resulting from a geographically weighted regression", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size = 11) %>%
+            row_spec(0, bold = T, color = "white", background = "#eb6864")
+
+globalr2<-round((1 - (gwr.model$results$rss/gwr.model$gTSS)),3)
+
+```
+
+In Table \@ref(tab:clusters) we saw the clusters that are more suspicious in case of collusion; therefore, I only did an analysis of coefficients of those clusters. Table \@ref(tab:clustercoeff) shows the coefficient of "Number of competitors" for each cluster_id, where no significant difference between "high-high" and "low-low" relationship was found.
+
+```{r clustercoeff, echo = FALSE, fig.align = 'center'}
+
+names(results)<-paste("results_",names(results),sep="")
+
+results<-cbind(stations_data_nona@data,results)
+
+cluster_coeff<-cluster_data[,c("relationship","station_id","cluster_id")] %>%
+            left_join(results, by=c("station_id"="ID")) %>%
+            dplyr::select(station_id,relationship,cluster_id,brand,price,
+                   brand_size,IER_Decile,percentage_car_travel,cars_per_dwelings,
+                   avg_comm_distance,distinct_brand_1mile,pop_density,
+                   intercept=`results_X.Intercept.`,
+                   coeff_brand_size=results_brand_sizesmall,
+                   coeff_IER_Decile=results_IER_Decile,
+                   coeff_percetage_car_travel=results_percentage_car_travel,
+                   coeff_cars_per_dwellings=results_cars_per_dwelings,
+                   coeff_avg_comm_distance=results_avg_comm_distance,
+                   coeff_distinct_brand_1mile=results_distinct_brand_1mile,
+                   coeff_pop_density=results_pop_density,
+                   lon=results_lon,
+                   lat=results_lat
+                   ) 
+
+cluster_coeff_grouped<- cluster_coeff %>% group_by(cluster_id,relationship) %>%
+            summarise(coeff_number_of_competitors=mean(coeff_distinct_brand_1mile))
+
+kable(cluster_coeff_grouped, caption = "Number of competitors coefficient for each cluster", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size = 11) %>% 
+            row_spec(0, bold = T, color = "white", background = "#eb6864") %>%
+            scroll_box(height = "300px")
+
+```
+<br/>
+In regards to how the model explains E10 prices, the Quasi-global R^2^ (which indicates how much variation of the prices is capture by the model) corresponds to `r globalr2`, which is far superior compared to the R^2^ obtained from a linear regression (0.21). However, due to spatial dependency, the R^2^ from a GWR is not constant through space. For this reason, the local R^2^ is calculated, so we can see it in each location (see Figure \@ref(fig:localr2)). It is worth noticing that the areas with significance spatial autocorrelation are also the areas with less local R^2^.
+
+```{r localr2, echo = FALSE, out.width = '60%', fig.align = 'center', fig.cap="Local	R2	heat	map	for	GWR	model", fig.pos="H"}
+#Reading R2
+lzn.kriged_r2 <- readRDS(here("09 Modelling Files","lzn_kriged_localr2.rds"))
+lzn.kriged_r2 <- spTransform(lzn.kriged_r2$krige_output, 
+                  CRS("+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"))
+
+tidy_spdf<-tidy(lzn.kriged_r2)
+tidy_var<-lzn.kriged_p_value@data
+tidy_var$id<-as.character(1:nrow(tidy_var))
+plotData<-left_join(tidy_spdf,tidy_var, by="id")
+#Maping
+ggplot()+geom_polygon(data=plotData,
+                      aes(fill=var1.pred,x=long,y=lat,group=group))+
+            scale_fill_gradient2(low="red",mid="red",high="grey80")+
+            geom_polygon(data=nsw_map_sub,
+                         aes(x=long,y=lat,group=group),
+                         fill=NA,colour="black",alpha=0.3)+
+            theme_minimal()+
+            labs(fill='Local R2')+
+            theme(axis.title.x=element_blank(),
+                  axis.text.x=element_blank(),
+                  axis.ticks.x=element_blank(),
+                  axis.title.y=element_blank(),
+                  axis.text.y=element_blank(),
+                  axis.ticks.y=element_blank(),
+                  panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank())
+
+```
+
+## Interpreting results {-} 
+
+The focus of this research is to find clusters where collusion could be present; therefore, the first step was to find areas where E10 prices were spatial dependent. Using the Moran's I statistic twenty-one clusters were found, which correspond to two main categories, "high-high" and "low-low". While "low-low" category could indicate lower prices due to competition, "high-high" could reflect price coordination used to achieve higher prices.
+
+The second step consisted in understanding how the number of close competitors affects petrol prices in the clusters previously described, which is capture by the coefficient of the variable "Number of competitors". The coefficient of the feature was divided into three categories, where the presence of one of the last two could reflect signs of collusion:
+
+* Coefficient < 0: The market has not reached an equilibrium; therefore, when a new competitor enters, the prices decrease.
+* Coefficient > 0: The market has reached an equilibrium; however when a new competitor enters, prices increases. This could be a signal of price coordination.
+* Coefficient ≈ 0: The market has reached an equilibrium, which could be natural or artificial. This means that when a new competitor enters, the prices stay the same. The equilibrium is artificial when it delivers greater profits than those available in a static Nash equilibrium [@byrneLearningCoordinateStudy2015].
+
+The following map shows the clusters divided by categories and a heat-map with the value of the coefficient of "Number of competitors". Special attention has to be given to "high-high" clusters (in purple) in zones where the coefficient is close or more than zero (yellow and red zones) because they are the clusters more suspicious of having unfair trading practices. Table \@ref(tab:topcluster) shows the top five clusters associated with possible collusion.
+
+```{r compcoef, echo = FALSE, out.width = '100%', fig.align = 'center', fig.pos="H"}
+#Reading Residuals
+lzn.kriged_comp <- readRDS(here("09 Modelling Files","lzn_kriged_competition.rds"))
+lzn.kriged_comp<-spTransform(lzn.kriged_comp$krige_output, 
+                  CRS("+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"))
+
+#Reading Petrol Stations Data
+stations_coord<-cluster_coeff %>% 
+            left_join(stations_data_nona@data[,c("ID","station_name")],
+                      by=c("station_id"="ID")) %>%
+            rename(Station_ID=station_id,
+                   Cluster_ID=cluster_id,
+                   Brand=brand,
+                   Station_name=station_name,
+                   Brand_size=brand_size,
+                   Number_of_competitors=distinct_brand_1mile,
+                   Price=price,
+                   Coeff_number_of_competitors=coeff_distinct_brand_1mile) %>%
+            mutate(Price=round(Price,2),
+                    Coeff_number_of_competitors=round(Coeff_number_of_competitors,3))
+coordinates(stations_coord)<- ~ lon + lat
+stations_coord@proj4string@projargs<-"+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"
+
+#Reading Petrol Stations Data
+cluster_coord_high<-cluster_coeff %>% 
+            filter(relationship=="high-high") %>%
+            group_by(cluster_id,relationship) %>%
+            summarise(lat=mean(lat),
+                      lon=mean(lon))
+coordinates(cluster_coord_high)<- ~ lon + lat
+cluster_coord_high@proj4string@projargs<-"+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"
+cluster_coord_high <- gBuffer(cluster_coord_high, byid = TRUE, width = GWRbandwidth)
+
+cluster_coord_low<-cluster_coeff %>% 
+            filter(relationship=="low-low") %>%
+            group_by(cluster_id,relationship) %>%
+            summarise(lat=mean(lat),
+                      lon=mean(lon))
+coordinates(cluster_coord_low)<- ~ lon + lat
+cluster_coord_low@proj4string@projargs<-"+proj=longlat +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +no_defs"
+cluster_coord_low <- gBuffer(cluster_coord_low, byid = TRUE, width = GWRbandwidth)
+
+#Maping
+map_gsyd<-tm_shape(lzn.kriged_comp) + 
+                        tm_polygons(title="Coeff number of competitors",
+                                    col="var1.pred",
+                                    palette=get_brewer_pal("-RdYlGn", n = 9, 
+                                                           contrast = c(0.43, 0.92),
+                                                           plot=FALSE),
+                                    popup.vars=FALSE,   
+                                    lwd=0,
+                                    border.alpha=0,
+                                    style = "cont") +
+            tm_shape(nsw_map_sub)+
+                        tm_polygons(id="SA2_NAME16",
+                                    popup.vars=c("IER_decile","Cars_per_dwelling",
+                                     "Average_commute_distance_km",
+                                     "Own_car_as_main_trasportation_perc",
+                                     "Population_density_per_km2"),
+                                    alpha=0)+
+            tm_shape(cluster_coord_high)+
+                        tm_borders(col ="purple")+
+                        tm_text("cluster_id")+
+            tm_shape(cluster_coord_low)+
+                        tm_borders(col ="blue")+
+                        tm_text("cluster_id")+
+            tm_shape(stations_coord) +
+                        tm_dots(id="Station_name",
+                                col="relationship",
+                                palette=c("high-high"="purple","low-low"="blue"),
+                                popup.vars=c("Station_ID","Cluster_ID",
+                                             "Brand","Brand_size",
+                                             "Number_of_competitors",
+                                             "Price",
+                                             "Coeff_number_of_competitors"),
+                                size=0.04)
+
+
+
+
+tmap_mode("view")
+map_gsyd
+
+```
+
+```{r topcluster, echo = FALSE, fig.align = 'center'}
+
+temp<-cluster_data_grouped %>% 
+            left_join(cluster_coeff_grouped[,c("cluster_id",
+                                               "coeff_number_of_competitors")]) %>%
+            filter(relationship=="high-high") %>%
+            arrange(desc(coeff_number_of_competitors)) %>%
+            dplyr::select(cluster_id, everything()) %>%
+            top_n(5)
+
+kable(temp, caption = "Top five clusters associated with possible collusion", 
+      booktabs = T) %>%
+            kable_styling(full_width = F,
+                          bootstrap_options = c("striped", "hover"),
+                          font_size = 11) %>%
+            row_spec(0, bold = T, color = "white", background = "#eb6864")
+
+```
+
+# Conclusion {-}
+This research presented how to use the Moran's I statistic in conjunction with the geographically weighted regression to obtain petrol station clusters with possible price coordination.  However, this methodology must not be used as the only tool to detect collusion, I only recommend it as a reference for resources allocation, so fair-trading agencies could know where to start further investigations. Moreover, any possible collusion detected will be difficult to verify because there is no explicit communication and coordination between companies, as stated in @byrneLearningCoordinateStudy2015 research. This type of coordination, called tacit collusion, is easier to develop in situations where competitors' prices are publicly available, which is the case here with platforms like (Fuel Watch)[https://www.fuelcheck.nsw.gov.au/].
+
+On the other hand, due to the model simplicity, the results could be out of touch with the market reality. There are three main limitations in the methodology used, where the main one corresponds to the lack of temporal analysis. In this case, we only selected one day worth of data, which is not enough to reflect price coordination between petrol stations due to collision must be consistent over time. Moreover, according to @wheelerMulticollinearityCorrelationLocal2005 multicollinearity in GWR is higher than in a global regression model, which means that the interpretation of the variable coefficient could lead to misleading conclusions. Lastly, we used a distance of 1 mile to define competitors; however, that distances could vary through space, being less in dense areas and higher in remote places.
+
+Nevertheless, this methodology could be improved using a spatio-temporal analysis, which can capture consistent price coordination in particular areas. Moreover, features could be improved, so an index of competition could be created for each petrol stations, considering its location and particularities. Finally, multicollinearity diagnostics tools must be used to detect and understand its effect on the GWR parameters.
+
+GitHub repository with the code: https://github.com/felipemonroy/Spatial-Analysis--Petrol-Price
+
+# References {-}
