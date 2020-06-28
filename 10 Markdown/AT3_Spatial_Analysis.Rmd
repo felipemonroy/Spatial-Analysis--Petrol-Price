@@ -51,10 +51,10 @@ According to the Australian Bureau of Statistics, around 15% of household spendi
 
 Nevertheless, how competition affects petrol prices is not constant across different petrol stations clusters. Therefore, it could be affected by market characteristics and even possible collusion between retailers. According to @byrneLearningCoordinateStudy2015, this last factor was present in Perth petrol market, but there was no evidence to call it formal collusion, just tacit.
 
-The propose of this research is to understand how competition affects retail petrol prices in Greater Sydney using spatial analysis, so we can capture how it differs across different locations. The outcome of this analysis may be helpful for organizations, like the ACCC, whose aim is to promote competition and fair trading. Therefore, these results could help them to focus their investigations on specific risk areas. 
+The purpose of this research is to understand how competition affects retail petrol prices in Greater Sydney using spatial analysis, so we can capture how it changes across different locations. The outcome of this analysis may be helpful for organizations, like the ACCC, whose aim is to promote competition and fair trading. Therefore, these results could help them to focus their investigations on specific risk areas. 
 
 # Background {-}
-In our previous analysis, we aimed to evaluate a series of factors that affect petrol prices for three years of data. We used variables that capture variability across time (seasonality and trend), environmental status, stations attributes and market characteristics. Table \@ref(tab:prevvariables) shows the details of the variables that we used.
+In our previous analysis, we aimed to evaluate a series of factors that affect petrol prices for three years of data. We used variables that capture variability across time (seasonality and trend), environmental status, stations attributes and market characteristics. Table \@ref(tab:prevvariables) shows the variables that we used.
 
 ```{r prevvariables, echo = FALSE, fig.align = 'center'}
 
@@ -88,7 +88,7 @@ Considering those reasons, it was not possible to use our previous analysis to u
 # Data Understanding {-}
 To start the spatial analysis is necessary to have data without temporal autocorrelation. For this reason, I changed the data and variables that we used in our first research. In regards to the data, only the day that represented better the population of petrol stations was selected to remove temporal autocorrelation. In this case, November 29th of 2019 had the prices for 87% of Greater Sydney petrol stations. Moreover, the fuel E10 was selected because it was the one with more observations.
 
-The next map shows the petrol stations in Greater Sydney with at least one observation between November and December of 2019, where the yellow dots correspond to the stations of our sample (November 29th of 2019). It can be noticed that the distribution of the sample is similar to the population of petrol stations.
+The next map shows the petrol stations in Greater Sydney with at least one observation between November and December of 2019, where the yellow dots correspond to the stations in our sample (November 29th of 2019). It can be noticed that the distribution of the sample is similar to the population of petrol stations.
 
 ```{r representativity, echo = FALSE, out.width = '100%', fig.align = 'center', fig.pos="H"}
 #Reading NSW Map
@@ -221,7 +221,7 @@ kable(temp, caption = "Features used for spatial analysis",
 ```
 
 ## Spatial Autocorrelation {-}
-Spatial autocorrelation measures how close observations (or neighbours) influence a variable, in this case, E10 price. When spatial autocorrelation is present, the residuals from a linear regression model, tend to have a spatial dependency. Figure \@ref(fig:residualsplot) shows the distribution of the residuals from linear regression (with E10 price as the independent variable) in Greater Sydney, where we can see that similar residual values are grouped. In this case, I used Kriging interpolation to fill the gaps between petrol stations.
+Spatial autocorrelation measures how close observations (or neighbours) influence a variable, in this case, E10 price. When spatial autocorrelation is present, the residuals from a linear regression model tend to have a spatial dependency. Figure \@ref(fig:residualsplot) shows the distribution of the residuals from linear regression (with E10 price as the independent variable) in Greater Sydney, where we can see that similar residual values are grouped. In this case, I used Kriging interpolation to fill the gaps between petrol stations.
 
 ```{r residualsplot, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="Distribution of the residuals from a linear regression model", fig.pos="H"}
 #Reading Residuals
@@ -252,7 +252,7 @@ ggplot()+geom_polygon(data=plotData,
                   panel.grid.minor = element_blank())
 ```
 
-Additionally, a statistical test was used to prove spatial autocorrelation. The statistic that I used is called Moran's I, which evaluates whether the pattern expressed is clustered, dispersed, or random [@esriHowSpatialAutocorrelation2020]. The hypothesis test related to this statistic has random spatial distribution as the null hypothesis and presence of spatial clusters as the alternative hypothesis. Table \@ref(tab:globalmorantest) shows a p-value close to zero; therefore, the null hypothesis is rejected, and we can assume that there is global spatial autocorrelation at the 0.05 significance level.
+Additionally, a statistical test was used to prove spatial autocorrelation. The statistic that I used is called Moran's I, which evaluates whether the pattern expressed is clustered, dispersed, or random [@esriHowSpatialAutocorrelation2020]. The hypothesis test related to this statistic corresponds to a random spatial distribution as the null hypothesis and presence of spatial clusters as the alternative hypothesis. Table \@ref(tab:globalmorantest) shows a p-value close to zero; therefore, the null hypothesis is rejected, and we can assume that there is global spatial autocorrelation at the 0.05 significance level.
 
 ```{r globalmorantest, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="Documents divided by number of words", fig.pos="H"}
 stations_data_nona<-read_rds(here("09 Modelling Files","input_data.rds")) %>%
@@ -291,7 +291,7 @@ kable(temp, caption = "Moran's I statistic results for global spatial autocorrel
 
 ```
 
-Moran's I statistic can also be calculated locally, so we can see where these clusters formed. Figure \@ref(fig:moranplot) shows how each observation is related to their neighbours; therefore, the diagonal line corresponds to a positive spatial autocorrelation. However, there are points separated from the diagonal line, which means that the relationship between neighbours is different. Four types of relationships are shown in each quadrant of the Figure, where the most important for this research corresponds to "high-high". This relationship means that where the petrol station has a price over the average, their neighbours also have it. 
+Moran's I statistic can also be calculated locally, so we can see where these clusters formed. Figure \@ref(fig:moranplot) shows how each observation is related to its neighbours; therefore, the diagonal line corresponds to a positive spatial autocorrelation. However, there are points separated from the diagonal line, which means that the relationship between neighbours is different. Four types of relationships are shown in each quadrant of the Figure, where the most important for this research corresponds to "high-high". This relationship means that where the petrol station has a price over the average, their neighbours also have it. 
 
 ```{r moranplot, echo = FALSE, out.width = '80%', fig.align = 'center', fig.cap="Moran's I Scatter Plot", fig.pos="H"}
 #Local Moran
@@ -435,14 +435,14 @@ kable(cluster_data_grouped, caption = "Clusters with significance spatial autoco
 ```
 
 # Modelling {-}
-The next step consists of understanding how each of the features exposed in Table \@ref(tab: currentvariables) affect E10 price in the clusters.  We discovered that spatial autocorrelation was present in the data, which means that some E10 prices are highly correlated with its neighbours, but not related to prices of distant stations. This means that features have a different effect on price depending on the location; therefore, a linear regression model would not be able to capture the local variations. 
+The next step consists of understanding how each of the features exposed in Table \@ref(tab:currentvariables) affect E10 price in the clusters.  We discovered that spatial autocorrelation was present in the data, which means that some E10 prices are highly correlated with its neighbours, but not related to prices of distant stations. This means that features have a different effect on price depending on the location; therefore, a linear regression model would not be able to capture the local variations. 
 
 On the other hand, the geographically weighted regression (GWR) can capture spatial variation in the coefficients. This exploratory technique work in a similar way as linear regression; however, it assigns different weights to each observation, which values are given based on distance. In other words, data points more close to the regression point are more important in the regression than far points [@fotheringhamSageHandbookSpatial2009]. Therefore, the weights and the resulting coefficients change every time the regression points change.
 
-The weighted function could be categorized into two types; fixed or adaptative. In this case, I used an adaptative weight function; therefore, the weights depend on the density of data points in the area and not only on a fixed distance. In this dataset that means that in more dense regions (regarding to petrol stations) the distance to high weighted observations will be lower than in areas with few data points.
+The weighted function could be categorized into two types; fixed and adaptative. In this case, I used an adaptative weight function; therefore, the weights depend on the density of data points in the area and not only on a fixed distance. In this dataset that means that in more dense regions (regarding to petrol stations) the distance to high weighted observations will be lower than in areas with few data points.
 
 ## Results {-}
-A summary with the coefficient of the geographically weighted regression with adaptative weight function is shown in Table \@ref(tab:gwr). In this Table we can see some measure of the distribution of the coefficients, which vary across space. Due to the objective is to find information that can expose signs of collusion, special attention is given to the variable "Number of competitors".
+A summary with the coefficient of the geographically weighted regression with adaptative weight function is shown in Table \@ref(tab:gwr). In this Table we can see some measures of the distribution of the coefficients, which vary across space. Due to the objective is to find information that can expose signs of collusion, special attention is given to the variable "Number of competitors".
 
 According to Table \@ref(tab:gwr) the coefficient of "Number of competitors" range from -1.71 to 0.86,  which means that in some places more competitors decrease petrol prices and in others, they increase it.
 
@@ -676,11 +676,11 @@ kable(temp, caption = "Top five clusters associated with possible collusion",
 ```
 
 # Conclusion {-}
-This research presented how to use the Moran's I statistic in conjunction with the geographically weighted regression to obtain petrol station clusters with possible price coordination.  However, this methodology must not be used as the only tool to detect collusion, I only recommend it as a reference for resources allocation, so fair-trading agencies could know where to start further investigations. Moreover, any possible collusion detected will be difficult to verify because there is no explicit communication and coordination between companies, as stated in @byrneLearningCoordinateStudy2015 research. This type of coordination, called tacit collusion, is easier to develop in situations where competitors' prices are publicly available, which is the case here with platforms like (Fuel Watch)[https://www.fuelcheck.nsw.gov.au/].
+This research presented how to use the Moran's I statistic in conjunction with the geographically weighted regression to obtain petrol station clusters with possible price coordination.  However, this methodology must not be used as the only tool to detect collusion, I only recommend it as a reference for resources allocation, so fair-trading agencies could know where to start further investigations. Moreover, any possible collusion detected will be difficult to verify because there is no explicit communication and coordination between companies, as stated in @byrneLearningCoordinateStudy2015 research. This type of coordination, called tacit collusion, is easier to develop in situations where competitors' prices are publicly available, which is the case here with platforms like [Fuel Watch](https://www.fuelcheck.nsw.gov.au/).
 
-On the other hand, due to the model simplicity, the results could be out of touch with the market reality. There are three main limitations in the methodology used, where the main one corresponds to the lack of temporal analysis. In this case, we only selected one day worth of data, which is not enough to reflect price coordination between petrol stations due to collision must be consistent over time. Moreover, according to @wheelerMulticollinearityCorrelationLocal2005 multicollinearity in GWR is higher than in a global regression model, which means that the interpretation of the variable coefficient could lead to misleading conclusions. Lastly, we used a distance of 1 mile to define competitors; however, that distances could vary through space, being less in dense areas and higher in remote places.
+On the other hand, due to the model simplicity, the results could be out of touch with the market reality. There are three main limitations in the methodology used, where the main one corresponds to the lack of temporal analysis. In this case, we only selected one day worth of data, which is not enough to reflect price coordination between petrol stations due to collision must be consistent over time. Moreover, according to @wheelerMulticollinearityCorrelationLocal2005 multicollinearity in GWR is higher than in a global regression model, which means that the interpretation of the variable coefficients could lead to misleading conclusions. Lastly, we used a distance of 1 mile to define competitors; however, that distances could vary through space, being less in dense areas and higher in remote places.
 
-Nevertheless, this methodology could be improved using a spatio-temporal analysis, which can capture consistent price coordination in particular areas. Moreover, features could be improved, so an index of competition could be created for each petrol stations, considering its location and particularities. Finally, multicollinearity diagnostics tools must be used to detect and understand its effect on the GWR parameters.
+Nevertheless, this methodology could be improved using a spatio-temporal analysis, which can capture consistent price coordination in particular areas. Moreover, features could be refined creating an index of competition for each petrol stations, considering their location and particularities. Finally, multicollinearity diagnostics tools must be used to detect and understand its effect on the GWR parameters.
 
 GitHub repository with the code: https://github.com/felipemonroy/Spatial-Analysis--Petrol-Price
 
